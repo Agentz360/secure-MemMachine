@@ -16,18 +16,18 @@ import asyncio
 import logging
 import os
 import sys
-import time
-from collections.abc import Callable
 from pathlib import Path
+from typing import Any, cast
 
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
-from starlette.types import AppType, ExceptionHandler, Lifespan
+from starlette.responses import JSONResponse
+from starlette.types import ExceptionHandler, Lifespan
 
+from memmachine.common.api.version import get_version
 from memmachine.server.api_v2.mcp import (
     initialize_resource,
     load_configuration,
@@ -36,6 +36,7 @@ from memmachine.server.api_v2.mcp import (
     mcp_http_lifespan,
 )
 from memmachine.server.api_v2.router import RestError, load_v2_api_router
+from memmachine.server.middleware import AccessLogMiddleware, RequestMetricsMiddleware
 
 logger = logging.getLogger(__name__)
 
@@ -43,11 +44,15 @@ logger = logging.getLogger(__name__)
 class MemMachineAPI(FastAPI):
     """MemMachine API wrapper."""
 
-    def __init__(self, lifespan: Lifespan[AppType] | None = None) -> None:
+    def __init__(self, lifespan: Lifespan[Any] | None = None) -> None:
         """Init the MemMachine API wrapper."""
         title = "MemMachine Server"
         description = "REST API server for MemMachine memory system"
-        super().__init__(title=title, description=description, lifespan=lifespan)
+        super().__init__(
+            title=title,
+            description=description,
+            lifespan=cast(Any, lifespan),
+        )
         self._configure()
 
     def _configure(self) -> None:
@@ -63,45 +68,23 @@ class MemMachineAPI(FastAPI):
     def _validation_error_handler_factory(error_code: int) -> ExceptionHandler:
         """Create an error handler factory for the validation error."""
 
-        async def handler(_: Request, exc: RequestValidationError) -> JSONResponse:
+        async def handler(_: Request, exc: Exception) -> JSONResponse:
             err = RestError(
                 code=error_code,
                 message="Invalid request payload",
-                ex=exc,
+                ex=cast(RequestValidationError, exc),
             )
             content = None
             if err.payload is not None:
                 content = {"detail": err.payload.model_dump()}
             return JSONResponse(status_code=error_code, content=content)
 
-        return handler
+        return cast(ExceptionHandler, handler)
 
 
-app = MemMachineAPI(
-    lifespan=mcp_http_lifespan,
-)
-
-
-@app.middleware("http")
-async def access_log_middleware(request: Request, call_next: Callable) -> Response:
-    """Middleware to log access details for each HTTP request."""
-    start_time = time.perf_counter()
-    response = await call_next(request)
-    duration_ms = (time.perf_counter() - start_time) * 1000
-    size = response.headers.get("content-length", "-")
-    client = request.client.host if request.client else "-"
-
-    logger.info(
-        'client=%s method=%s path="%s" status=%d duration_ms=%.2f size=%s',
-        client,
-        request.method,
-        request.url.path,
-        response.status_code,
-        duration_ms,
-        size,
-    )
-
-    return response
+app = MemMachineAPI(lifespan=mcp_http_lifespan)
+app.add_middleware(cast(type, AccessLogMiddleware))
+app.add_middleware(cast(type, RequestMetricsMiddleware))
 
 
 def start_http() -> None:
@@ -163,7 +146,17 @@ def main() -> None:
         action="store_true",
         help="Run in MCP stdio mode",
     )
+    parser.add_argument(
+        "--version",
+        action="store_true",
+        help="Show the version and exit",
+    )
     args = parser.parse_args()
+
+    # Handle --version early
+    if args.version:
+        sys.stdout.write(f"{get_version()}\n")
+        sys.exit(0)
 
     try:
         if args.stdio:

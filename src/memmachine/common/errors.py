@@ -73,6 +73,27 @@ class SessionNotFoundError(MemMachineError):
         super().__init__(f"Session '{session_key}' does not exist.")
 
 
+class SessionInUseError(MemMachineError):
+    """Error when trying to delete a session that is currently in use."""
+
+    def __init__(self, session_key: str, ref_count: int = 0) -> None:
+        """Initialize with the session key that is in use."""
+        self.session_key = session_key
+        msg = f"Session '{session_key}' is in use and can't be deleted."
+        if ref_count > 0:
+            msg += f" Reference count: {ref_count}."
+        super().__init__(msg)
+
+
+class ShortTermMemoryClosedError(MemMachineError):
+    """Error when trying to access closed short-term memory."""
+
+    def __init__(self, session_key: str) -> None:
+        """Initialize with the session key of the closed short-term memory."""
+        self.session_key = session_key
+        super().__init__(f"Short-term memory for session '{session_key}' is closed.")
+
+
 class InvalidPasswordError(MemMachineError):
     """Error for invalid password scenarios."""
 
@@ -95,3 +116,11 @@ class InvalidEmbedderError(MemMachineError):
 
 class InvalidRerankerError(MemMachineError):
     """Exception raised for invalid reranker."""
+
+
+class EpisodicMemoryManagerClosedError(MemMachineError):
+    """Exception raised when operating on a closed EpisodicMemory instance."""
+
+    def __init__(self) -> None:
+        """Initialize the error."""
+        super().__init__("The EpisodicMemoryManager is closed and cannot be used.")
